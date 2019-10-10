@@ -1,0 +1,210 @@
+const express = require('express');
+const User = require('../models/user');
+const multer = require('multer');
+const sharp = require('sharp');
+const auth = require('../middleware/auth');
+const router = express.Router();
+
+/**
+ * Cria um usuário.
+ * 
+ * @name User Cadastro 
+ * @route {POST} /users
+ */
+router.post('/users', async (req, res) => {
+    const user = new User(req.body);
+
+    try {
+        await user.save();
+        const token = await user.generateAuthToken();
+        res.status(201).send({ user, token });
+    } catch (e) {
+        res.status(400).send(e);
+    }
+});
+
+/**
+ * Realiza login e obtém token de autenticação.
+ * 
+ * @name User Login 
+ * @route {POST} /users/login
+ */
+router.post('/users/login', async (req, res) => {
+    try {
+        const user = await User.findByCredentials(req.body.email, req.body.password);
+        const token = await user.generateAuthToken();
+        res.send({ user, token });
+    } catch (e) {
+        res.status(400).send();
+    }
+});
+
+/**
+ * Realiza logout de um dispositivo específico.
+ * 
+ * @name User Logout
+ * @route {POST} /users/logout
+ * @authentication Essa rota requer autenticação JWT e retorna 400 se falhar.
+ */
+router.post('/users/logout', auth, async (req, res) => {
+    try {
+        req.user.tokens = req.user.tokens.filter( (token) => {
+            return token.token !== req.token;
+        });
+        await req.user.save();
+
+        res.send();
+    } catch (e) {
+        res.status(500).send();
+    }   
+});
+
+/**
+ * Realiza logout de todos dispositivos.
+ * 
+ * @name User LogoutAll 
+ * @route {POST} /users/logoutAll
+ * @authentication Essa rota requer autenticação JWT e retorna 400 se falhar.
+ */
+router.post('/users/logoutAll', auth, async (req, res) => {
+    try {
+        req.user.tokens = [];
+        await req.user.save();
+
+        res.status(200).send();
+    } catch (e) {
+        res.status(500).send();
+    }
+});
+
+/**
+ * Recupera o profile de um usuário.
+ * 
+ * @name User Profile 
+ * @route {GET} /users/me
+ * @authentication Essa rota requer autenticação JWT e retorna 400 se falhar.
+ */
+router.get('/users/me', auth, async (req, res) => {
+    res.send(req.user);
+});
+
+/**
+ * Atualiza os dados de um usuário.
+ * 
+ * @name User Atualização 
+ * @route {PATCH} /users/me
+ * @authentication Essa rota requer autenticação JWT e retorna 400 se falhar.
+ */
+router.patch('/users/me', auth, async (req, res) => {
+    const updates = Object.keys(req.body); // It returns an array of the keys in the body of the reponse (e.g., [ 'name', 'email', 'password' ])
+    const allowedUpdates = ['name', 'email', 'password', 'age']
+    const isValidOperation = updates.every((update) => allowedUpdates.includes(update));
+
+    if (!isValidOperation) {
+        return res.status(400).send({ error: 'Invalid updates!'} );
+    }
+
+    try {
+        updates.forEach((update) => req.user[update] = req.body[update]);
+        await req.user.save();
+
+        res.send(req.user);
+    } catch (e) {
+        res.status(400).send();
+    }
+});
+
+/**
+ * Remove a conta do usuário.
+ * 
+ * @name User Remoção 
+ * @route {DELETE} /users/me
+ * @authentication Essa rota requer autenticação JWT e retorna 400 se falhar.
+ */
+router.delete('/users/me', auth, async (req, res) => {
+    try {
+        await req.user.remove()
+        res.send(req.user);
+    } catch (e) {
+        res.status(500).send();
+    }
+});
+
+/**
+ * Configura o upload de avatar.
+ * 
+ * @name Upload Configuração 
+ */
+const upload = multer({
+    limits: {
+        fileSize: 1000000
+    },
+    fileFilter(req, file, cb) {
+        if (!file.originalname.match(/\.(jpg|jpeg|png)$/)) {
+            return cb(new Error('Please upload a image file'));
+        }
+
+        cb(undefined, true);
+    }
+});
+
+/**
+ * Realiza upload do avatar do usuário.
+ * 
+ * @name Upload Avatar
+ * @route {POST} /users/me/avatar
+ * @authentication Essa rota requer autenticação JWT e retorna 400 se falhar.
+ */
+router.post('/users/me/avatar', auth, upload.single('avatar'), async (req, res) => {
+    const buffer = await sharp(req.file.buffer).resize({ width: 250, height: 250 }).png().toBuffer();
+    req.user.avatar = buffer;
+    await req.user.save();
+    res.send();
+}, (error, req, res, next) => {
+    res.status(400).send({
+        error: error.message
+    });
+});
+
+/**
+ * Remove o avatar do usuário.
+ * 
+ * @name Avatar Remoção
+ * @route {DELETE} /users/me/avatar
+ * @authentication Essa rota requer autenticação JWT e retorna 400 se falhar.
+ */
+router.delete('/users/me/avatar', auth, async (req, res) => {
+    req.user.avatar = undefined;
+    await req.user.save();
+    res.send();
+}, (error, req, res, next) => {
+    res.status(400).send({
+        error: error.message
+    });
+});
+
+/**
+ * Recupera o avatar de um usuário
+ * 
+ * @name Avatar Recuperação 
+ * @param id Indenticador único do usuário.
+ * @route {GET} /users/id/avatar
+ * @authentication Essa rota requer autenticação JWT e retorna 400 se falhar.
+ */
+router.get('/users/:id/avatar', async (req, res) => {
+    // TODO: adicionar middleware auth
+    try {
+        const user = await User.findById(req.params.id);
+
+        if (!user || !user.avatar) {
+            throw new Error();
+        }
+
+        res.set('Content-Type', 'image/png');
+        res.send(user.avatar);
+    } catch (e) {
+        res.status(404).send();
+    }
+});
+
+module.exports = router;
